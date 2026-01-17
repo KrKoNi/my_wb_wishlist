@@ -139,6 +139,7 @@
 
         .btn-add { background: linear-gradient(45deg, #ff9a9e, #fad0c4); color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,0.1); }
         .btn-save { background: linear-gradient(45deg, #a18cd1, #fbc2eb); margin-top: 10px; display: inline-flex; align-items: center; gap: 5px; }
+        .btn-share { background: linear-gradient(45deg, #84fab0, #8fd3f4); margin-top: 10px; display: inline-flex; align-items: center; gap: 5px; color: #444; }
         .btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
         .btn:active { transform: translateY(0); }
 
@@ -182,7 +183,7 @@
         <input x-model="newItem.name" placeholder="Название (напр. Dyson Airwrap)" @keyup.enter="addItem()" />
 
         <label class="input-label">Ссылка или артикул (WB/Ozon)</label>
-        <input x-model="newItem.link" placeholder="Артикул или https://..." />
+        <input x-model="newItem.link" placeholder="Артикул или https://..." @input.debounce.500ms="tryExtractImage(true)" @paste="setTimeout(() => tryExtractImage(true), 100)" />
 
         <label class="input-label">Фото товара</label>
         <div style="display: flex; gap: 8px;">
@@ -194,9 +195,12 @@
                 🔍 Извлечь
             </button>
         </div>
-        <div x-show="newItem.img" style="margin-top: 5px; font-size: 11px; color: #4caf50; display: flex; align-items: center; justify-content: space-between;">
-            <span>✅ Фото готово</span>
-            <span style="cursor: pointer; text-decoration: underline; color: #999;" @click="newItem.img = ''; newItem.imgName = ''">удалить</span>
+        <div x-show="newItem.img" style="margin-top: 10px; display: flex; align-items: center; gap: 10px; padding: 8px; background: #f9f9f9; border-radius: 12px; border: 1px solid #eee;">
+            <img :src="newItem.img" style="width: 50px; height: 50px; object-fit: cover; border-radius: 8px;" />
+            <div style="flex: 1; font-size: 11px; color: #4caf50; display: flex; align-items: center; justify-content: space-between;">
+                <span>✅ Фото готово</span>
+                <span style="cursor: pointer; text-decoration: underline; color: #999;" @click="newItem.img = ''; newItem.imgName = ''">удалить</span>
+            </div>
         </div>
     </div>
 
@@ -205,6 +209,9 @@
     <div style="margin-top: 15px; display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; border-top: 1px solid #eee; padding-top: 10px;">
         <button class="btn btn-save" @click="saveScreenshot()" :disabled="takingScreenshot">
             <span x-text="takingScreenshot ? '📸 Снимаю...' : '📸 Сохранить картинкой'"></span>
+        </button>
+        <button class="btn btn-share" @click="shareList()">
+            <span>🔗 Поделиться ссылкой</span>
         </button>
         <button class="btn-clear" @click="resetList()" x-show="items.length > 0">Очистить всё</button>
     </div>
@@ -248,6 +255,24 @@
             takingScreenshot: false,
 
             init() {
+                // Проверка на наличие данных в URL
+                const urlParams = new URLSearchParams(window.location.search);
+                const sharedData = urlParams.get('data');
+                if (sharedData) {
+                    try {
+                        const decoded = JSON.parse(decodeURIComponent(escape(atob(sharedData))));
+                        if (Array.isArray(decoded) && decoded.length > 0) {
+                            if (confirm('Загрузить вишлист по ссылке? (Ваш текущий список будет заменен)')) {
+                                this.items = decoded;
+                                // Очищаем URL от данных после загрузки
+                                window.history.replaceState({}, document.title, window.location.pathname);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Ошибка при разборе общих данных', e);
+                    }
+                }
+
                 const saved = localStorage.getItem('wishlist_data_v2') || localStorage.getItem('ai_wishlist_data');
                 if (saved) {
                     try {
@@ -271,10 +296,10 @@
                 reader.readAsDataURL(file);
             },
 
-            tryExtractImage() {
+            async tryExtractImage(silent = false) {
                 const link = this.newItem.link.trim();
                 if (!link) {
-                    alert('Введите ссылку или артикул WB в поле выше');
+                    if (!silent) alert('Введите ссылку или артикул WB в поле выше');
                     return;
                 }
 
@@ -282,6 +307,13 @@
                 if (wbMatch) {
                     const article = wbMatch[1];
                     this.newItem.img = this.getWbImage(article);
+
+                    // Попытка получить название товара
+                    try {
+                        this.newItem.name = await this.getWbName(article);
+                    } catch (e) {
+                        console.error('Ошибка при получении названия WB:', e);
+                    }
                     return;
                 }
 
@@ -290,7 +322,7 @@
                     return;
                 }
 
-                alert('Не удалось определить артикул WB или прямую ссылку на фото. Попробуйте загрузить файл.');
+                if (!silent) alert('Не удалось определить артикул WB или прямую ссылку на фото. Попробуйте загрузить файл.');
             },
 
             getWbImage(article) {
@@ -312,9 +344,42 @@
                 else if (vol >= 1920 && vol <= 2045) basket = '13';
                 else if (vol >= 2046 && vol <= 2189) basket = '14';
                 else if (vol >= 2190 && vol <= 2405) basket = '15';
-                else basket = '16';
+                else if (vol >= 2406 && vol <= 2621) basket = '16';
+                else if (vol >= 2622 && vol <= 2837) basket = '17';
+                else if (vol >= 2838 && vol <= 3053) basket = '18';
+                else if (vol >= 3054 && vol <= 3269) basket = '19';
+                else basket = '20';
 
-                return `https://basket-${basket}.wbbasket.ru/vol${vol}/part${part}/${article}/images/big/1.webp`;
+                return `https://basket-${basket}.wbcontent.net/vol${vol}/part${part}/${article}/images/big/1.webp`;
+            },
+
+            async getWbName(article) {
+                const vol = Math.floor(article / 100000);
+                const part = Math.floor(article / 1000);
+                let basket = '01';
+                if (vol >= 0 && vol <= 143) basket = '01';
+                else if (vol >= 144 && vol <= 287) basket = '02';
+                else if (vol >= 288 && vol <= 431) basket = '03';
+                else if (vol >= 432 && vol <= 719) basket = '04';
+                else if (vol >= 720 && vol <= 1007) basket = '05';
+                else if (vol >= 1008 && vol <= 1061) basket = '06';
+                else if (vol >= 1062 && vol <= 1115) basket = '07';
+                else if (vol >= 1116 && vol <= 1169) basket = '08';
+                else if (vol >= 1170 && vol <= 1313) basket = '09';
+                else if (vol >= 1314 && vol <= 1601) basket = '10';
+                else if (vol >= 1602 && vol <= 1655) basket = '11';
+                else if (vol >= 1656 && vol <= 1919) basket = '12';
+                else if (vol >= 1920 && vol <= 2045) basket = '13';
+                else if (vol >= 2046 && vol <= 2189) basket = '14';
+                else if (vol >= 2190 && vol <= 2405) basket = '15';
+                else if (vol >= 2406 && vol <= 2621) basket = '16';
+                else if (vol >= 2622 && vol <= 2837) basket = '17';
+                else if (vol >= 2838 && vol <= 3053) basket = '18';
+                else if (vol >= 3054 && vol <= 3269) basket = '19';
+                else basket = '20';
+                const body = await fetch(`https://basket-${basket}.wbcontent.net/vol${vol}/part${part}/${article}/info/ru/card.json`).then(r => r.json());
+                const fullName = body.imt_name;
+                return fullName;
             },
 
             addItem() {
@@ -374,6 +439,41 @@
                         this.takingScreenshot = false;
                     });
                 }, 100);
+            },
+
+            shareList() {
+                if (this.items.length === 0) {
+                    alert('Сначала добавьте товары в список');
+                    return;
+                }
+
+                try {
+                    // Кодируем данные в Base64. 
+                    // Для URL лучше использовать btoa(unescape(encodeURIComponent(str))) для поддержки кириллицы
+                    const dataStr = JSON.stringify(this.items);
+                    const base64 = btoa(unescape(encodeURIComponent(dataStr)));
+                    
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('data', base64);
+                    
+                    const shareUrl = url.toString();
+
+                    if (shareUrl.length > 8000) {
+                        alert('Список слишком длинный для передачи через ссылку. Попробуйте удалить пару товаров.');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(shareUrl).then(() => {
+                        alert('Ссылка скопирована в буфер обмена!');
+                    }).catch(err => {
+                        console.error('Ошибка при копировании:', err);
+                        // Фолбэк если clipboard API не сработал
+                        prompt('Скопируйте ссылку вручную:', shareUrl);
+                    });
+                } catch (e) {
+                    console.error('Ошибка при создании ссылки:', e);
+                    alert('Не удалось создать ссылку.');
+                }
             }
         };
     }
