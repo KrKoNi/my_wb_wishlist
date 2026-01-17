@@ -11,6 +11,9 @@
         :root {
             --bg1: #fdfbfb;
             --bg2: #ebedee;
+            --pattern-opacity: 0.05;
+            --pattern-size: 20px;
+            --accent-color: #ff9a9e;
         }
 
         body {
@@ -18,9 +21,39 @@
             min-height: 100vh;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, var(--bg1), var(--bg2));
-            transition: background 0.8s ease;
+            position: relative;
+            transition: background 1s ease;
             overflow-x: hidden;
             padding-bottom: 50px;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: var(--bg-pattern, none);
+            background-size: var(--pattern-size) var(--pattern-size);
+            opacity: var(--pattern-opacity);
+            color: var(--accent-color, #ccc);
+            pointer-events: none;
+            z-index: -1;
+            transition: background-image 1s ease, background-size 1s ease, color 1s ease;
+        }
+
+        /* "Миленькие приколюшки" - плавающие элементы */
+        .decoration {
+            position: fixed;
+            pointer-events: none;
+            z-index: -1;
+            font-size: 24px;
+            opacity: 0.3;
+            animation: float 10s infinite ease-in-out;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            33% { transform: translate(30px, -50px) rotate(10deg); }
+            66% { transform: translate(-20px, 20px) rotate(-10deg); }
         }
 
         /* Контейнер для карточек, имитирующий поверхность стола */
@@ -173,6 +206,11 @@
 
 <body x-data="app()">
 
+<!-- Контейнер для декораций -->
+<template x-for="dec in decorations">
+    <div class="decoration" :style="`top: ${dec.top}%; left: ${dec.left}%; animation-delay: ${dec.delay}s;`" x-text="dec.emoji"></div>
+</template>
+
 <div class="ui-panel">
     <h2 style="margin: 0 0 15px 0; font-weight: 800; background: -webkit-linear-gradient(45deg, #333, #666); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
         ✨ Birthday Wishlist
@@ -250,39 +288,176 @@
                 name: '',
                 link: '',
                 img: '',
-                imgName: ''
+                imgName: '',
+                category: '',
+                colorHint: ''
             },
-            takingScreenshot: false,
+            decorations: [],
+            isUpdatingBackground: false,
 
             init() {
                 // Проверка на наличие данных в URL
                 const urlParams = new URLSearchParams(window.location.search);
                 const sharedData = urlParams.get('data');
+                
+                let initialItems = [];
+                const saved = localStorage.getItem('wishlist_data_v2') || localStorage.getItem('ai_wishlist_data');
+                if (saved) {
+                    try {
+                        initialItems = JSON.parse(saved);
+                    } catch(e) { console.error('Ошибка загрузки сохранения'); }
+                }
+
                 if (sharedData) {
                     try {
                         const decoded = JSON.parse(decodeURIComponent(escape(atob(sharedData))));
                         if (Array.isArray(decoded) && decoded.length > 0) {
-                            if (confirm('Загрузить вишлист по ссылке? (Ваш текущий список будет заменен)')) {
+                            // Если данные в URL отличаются от локальных, спрашиваем подтверждение
+                            if (JSON.stringify(decoded) !== JSON.stringify(initialItems)) {
+                                if (confirm('Загрузить вишлист по ссылке? (Ваш текущий список будет заменен)')) {
+                                    this.items = decoded;
+                                } else {
+                                    this.items = initialItems;
+                                }
+                            } else {
                                 this.items = decoded;
-                                // Очищаем URL от данных после загрузки
-                                window.history.replaceState({}, document.title, window.location.pathname);
                             }
                         }
                     } catch (e) {
-                        console.error('Ошибка при разборе общих данных', e);
+                        console.error('Ошибка при разборе данных из URL', e);
+                        this.items = initialItems;
                     }
+                } else {
+                    this.items = initialItems;
                 }
 
-                const saved = localStorage.getItem('wishlist_data_v2') || localStorage.getItem('ai_wishlist_data');
-                if (saved) {
-                    try {
-                        this.items = JSON.parse(saved);
-                    } catch(e) { console.error('Ошибка загрузки сохранения'); }
-                }
+                // Установка фона при загрузке
+                this.updateBackground();
 
                 this.$watch('items', (val) => {
-                    localStorage.setItem('wishlist_data_v2', JSON.stringify(val));
+                    const json = JSON.stringify(val);
+                    localStorage.setItem('wishlist_data_v2', json);
+                    this.updateUrl(val);
+                    this.updateBackground();
                 });
+
+                // Первичная синхронизация URL при загрузке, если в URL пусто
+                if (!sharedData && this.items.length > 0) {
+                    this.updateUrl(this.items);
+                }
+            },
+
+            async updateBackground() {
+                if (this.items.length === 0) {
+                    document.documentElement.style.setProperty('--bg1', '#fdfbfb');
+                    document.documentElement.style.setProperty('--bg2', '#ebedee');
+                    document.documentElement.style.setProperty('--bg-pattern', 'none');
+                    this.decorations = [];
+                    return;
+                }
+
+                if (this.isUpdatingBackground) return;
+                this.isUpdatingBackground = true;
+
+                try {
+                    // Собираем контекст из всех товаров
+                    const context = this.items.map(i => `${i.name} (${i.category}, ${i.colorHint})`).join(', ');
+                    
+                    // Формируем запрос к ИИ
+                    const prompt = `Based on these gifts: "${context}", suggest a color theme and style. 
+                    Return ONLY a JSON object: 
+                    {"c1": "#hex", "c2": "#hex", "pattern": "dots|grid|stripes|waves", "emojis": ["emoji1", "emoji2"]}`;
+                    
+                    const response = await fetch(`https://text.pollinations.ai/${encodeURIComponent(prompt)}?json=true`);
+                    const data = await response.json();
+
+                    if (data && data.c1) {
+                        document.documentElement.style.setProperty('--bg1', data.c1);
+                        document.documentElement.style.setProperty('--bg2', data.c2 || data.c1);
+                        
+                        // Пытаемся сделать цвет узора чуть темнее/насыщеннее для видимости
+                        const accent = data.c1;
+                        document.documentElement.style.setProperty('--accent-color', accent);
+                        
+                        let pattern = 'none';
+                        let size = '20px';
+                        
+                        if (data.pattern === 'dots') {
+                            pattern = `radial-gradient(currentColor 0.5px, transparent 0.5px)`;
+                            size = '20px';
+                        } else if (data.pattern === 'grid') {
+                            pattern = `linear-gradient(currentColor 0.5px, transparent 0.5px), linear-gradient(90deg, currentColor 0.5px, transparent 0.5px)`;
+                            size = '30px';
+                        } else if (data.pattern === 'stripes') {
+                            pattern = `repeating-linear-gradient(45deg, currentColor 0, currentColor 1px, transparent 0, transparent 50%)`;
+                            size = '15px';
+                        } else if (data.pattern === 'waves') {
+                            pattern = `radial-gradient(circle at 100% 150%, currentColor 24%, white 25%, white 28%, currentColor 29%, currentColor 36%, white 36%, white 40%, transparent 40%), radial-gradient(circle at 0 150%, currentColor 24%, white 25%, white 28%, currentColor 29%, currentColor 36%, white 36%, white 40%, transparent 40%)`;
+                            size = '40px';
+                        }
+
+                        document.documentElement.style.setProperty('--bg-pattern', pattern);
+                        document.documentElement.style.setProperty('--pattern-size', size);
+
+                        // Обновляем декорации
+                        if (data.emojis && Array.isArray(data.emojis)) {
+                            this.decorations = data.emojis.slice(0, 5).map(emoji => ({
+                                emoji,
+                                top: Math.random() * 80 + 10,
+                                left: Math.random() * 80 + 10,
+                                delay: Math.random() * 5
+                            }));
+                        }
+                    }
+                } catch (e) {
+                    console.error('AI Background update failed, using fallback', e);
+                    this.fallbackBackground();
+                } finally {
+                    this.isUpdatingBackground = false;
+                }
+            },
+
+            fallbackBackground() {
+                const lastItem = this.items[this.items.length - 1];
+                const category = (lastItem?.category || '').toLowerCase();
+                const colorHint = (lastItem?.colorHint || '').toLowerCase();
+
+                let c1 = '#fdfbfb', c2 = '#ebedee', pattern = 'none';
+
+                if (category.includes('косметика') || category.includes('красота') || colorHint.includes('розовый')) {
+                    c1 = '#fff1f2'; c2 = '#ffe4e6';
+                    pattern = 'radial-gradient(#fda4af 0.5px, transparent 0.5px)';
+                } else if (category.includes('электроника') || category.includes('техника') || category.includes('фото')) {
+                    c1 = '#f0f9ff'; c2 = '#e0f2fe';
+                    pattern = 'linear-gradient(#bae6fd 0.5px, transparent 0.5px), linear-gradient(90deg, #bae6fd 0.5px, transparent 0.5px)';
+                } else {
+                    c1 = '#fafaf9'; c2 = '#f5f5f4';
+                    pattern = 'none';
+                }
+
+                document.documentElement.style.setProperty('--bg1', c1);
+                document.documentElement.style.setProperty('--bg2', c2);
+                document.documentElement.style.setProperty('--bg-pattern', pattern);
+            },
+
+            updateUrl(items) {
+                try {
+                    const url = new URL(window.location.href);
+                    if (items.length > 0) {
+                        const dataStr = JSON.stringify(items);
+                        const base64 = btoa(unescape(encodeURIComponent(dataStr)));
+                        if (base64.length < 8000) {
+                            url.searchParams.set('data', base64);
+                        } else {
+                            url.searchParams.delete('data');
+                        }
+                    } else {
+                        url.searchParams.delete('data');
+                    }
+                    window.history.replaceState({}, document.title, url.toString());
+                } catch (e) {
+                    console.error('Ошибка при обновлении URL:', e);
+                }
             },
 
             handleFileUpload(event) {
@@ -310,7 +485,10 @@
 
                     // Попытка получить название товара
                     try {
-                        this.newItem.name = await this.getWbName(article);
+                        const card = await this.getWbCard(article);
+                        this.newItem.name = card.imt_name;
+                        this.newItem.category = card.subj_root_name || card.subj_name || '';
+                        this.newItem.colorHint = card.nm_colors_names || '';
                     } catch (e) {
                         console.error('Ошибка при получении названия WB:', e);
                     }
@@ -353,7 +531,7 @@
                 return `https://basket-${basket}.wbcontent.net/vol${vol}/part${part}/${article}/images/big/1.webp`;
             },
 
-            async getWbName(article) {
+            async getWbCard(article) {
                 const vol = Math.floor(article / 100000);
                 const part = Math.floor(article / 1000);
                 let basket = '01';
@@ -378,8 +556,7 @@
                 else if (vol >= 3054 && vol <= 3269) basket = '19';
                 else basket = '20';
                 const body = await fetch(`https://basket-${basket}.wbcontent.net/vol${vol}/part${part}/${article}/info/ru/card.json`).then(r => r.json());
-                const fullName = body.imt_name;
-                return fullName;
+                return body;
             },
 
             addItem() {
@@ -398,10 +575,12 @@
                     link: this.newItem.link.trim(),
                     img: this.newItem.img || 'https://via.placeholder.com/150?text=No+Photo',
                     rotation: rotation,
-                    offsetY: offsetY
+                    offsetY: offsetY,
+                    category: this.newItem.category,
+                    colorHint: this.newItem.colorHint
                 });
 
-                this.newItem = { name: '', link: '', img: '', imgName: '' };
+                this.newItem = { name: '', link: '', img: '', imgName: '', category: '', colorHint: '' };
                 const fInput = document.getElementById('fileInput');
                 if (fInput) fInput.value = '';
             },
@@ -419,21 +598,27 @@
             saveScreenshot() {
                 this.takingScreenshot = true;
                 const element = document.getElementById('wishlist-container');
+                
+                // Временно меняем фон контейнера на текущий фон body для скриншота
+                const currentBg = getComputedStyle(document.body).background;
+                const originalContainerBg = element.style.background;
+                element.style.background = currentBg;
 
                 setTimeout(() => {
                     html2canvas(element, {
-                        backgroundColor: '#fdfbfb',
                         scale: 2,
                         useCORS: true,
                         allowTaint: false,
                         logging: false
                     }).then(canvas => {
+                        element.style.background = originalContainerBg;
                         const link = document.createElement('a');
                         link.download = 'my-wishlist.png';
                         link.href = canvas.toDataURL('image/png');
                         link.click();
                         this.takingScreenshot = false;
                     }).catch(err => {
+                        element.style.background = originalContainerBg;
                         console.error('Ошибка скриншота:', err);
                         alert('Ошибка при создании скриншота.');
                         this.takingScreenshot = false;
@@ -447,33 +632,18 @@
                     return;
                 }
 
-                try {
-                    // Кодируем данные в Base64. 
-                    // Для URL лучше использовать btoa(unescape(encodeURIComponent(str))) для поддержки кириллицы
-                    const dataStr = JSON.stringify(this.items);
-                    const base64 = btoa(unescape(encodeURIComponent(dataStr)));
-                    
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('data', base64);
-                    
-                    const shareUrl = url.toString();
+                const shareUrl = window.location.href;
 
-                    if (shareUrl.length > 8000) {
-                        alert('Список слишком длинный для передачи через ссылку. Попробуйте удалить пару товаров.');
-                        return;
-                    }
-
-                    navigator.clipboard.writeText(shareUrl).then(() => {
-                        alert('Ссылка скопирована в буфер обмена!');
-                    }).catch(err => {
-                        console.error('Ошибка при копировании:', err);
-                        // Фолбэк если clipboard API не сработал
-                        prompt('Скопируйте ссылку вручную:', shareUrl);
-                    });
-                } catch (e) {
-                    console.error('Ошибка при создании ссылки:', e);
-                    alert('Не удалось создать ссылку.');
+                if (shareUrl.length > 8000) {
+                    alert('Список слишком длинный для передачи через ссылку. Ссылка в адресной строке может быть неполной.');
                 }
+
+                navigator.clipboard.writeText(shareUrl).then(() => {
+                    alert('Ссылка скопирована из адресной строки!');
+                }).catch(err => {
+                    console.error('Ошибка при копировании:', err);
+                    prompt('Скопируйте ссылку вручную:', shareUrl);
+                });
             }
         };
     }
